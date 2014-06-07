@@ -134,7 +134,7 @@ def bch_expansion_auto(A, B, independent=False):
         print("A coefficient: ", c)
 
     e_bch = bch_expansion(A, B, N=N).doit(independent=independent)
-    e = normal_ordered_form(e_bch.expand(), independent=independent)
+    e = simplify(normal_ordered_form(e_bch.expand(), independent=independent)).expand()
 
     ops = extract_operator_products(e, independent=independent)
 
