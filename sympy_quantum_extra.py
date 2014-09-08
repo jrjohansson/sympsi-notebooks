@@ -248,7 +248,7 @@ def bch_expansion(A, B, N=6, collect_operators=None, independent=False,
             return qsimplify(e_collected.subs({
                     exp(c).series(c, n=N).removeO(): exp(c), #c
                     exp(-c).series(-c, n=N).removeO(): exp(-c), #-c
-                    exp(2*c).series(c, n=N).removeO(): exp(2*c), #c
+                    exp(2*c).series(2*c, n=N).removeO(): exp(2*c), #c
                     exp(-2*c).series(-2*c, n=N).removeO(): exp(-2*c), #-c, list(c.free_symbols)[0]
                     #
                     cosh(c).series(c, n=N).removeO(): cosh(c),
@@ -260,8 +260,13 @@ def bch_expansion(A, B, N=6, collect_operators=None, independent=False,
                     #
                     sin(c).series(c, n=N).removeO(): sin(c),
                     cos(c).series(c, n=N).removeO(): cos(c),
-                    sin(2*c).series(c, n=N).removeO(): sin(2*c),
-                    cos(2*c).series(c, n=N).removeO(): cos(2*c),
+                    sin(2*c).series(2*c, n=N).removeO(): sin(2*c),
+                    cos(2*c).series(2*c, n=N).removeO(): cos(2*c),
+                    sin(2*I*c).series(2*I*c, n=N).removeO(): sin(2*I*c),
+                    sin(-2*I*c).series(-2*I*c, n=N).removeO(): sin(-2*I*c),
+                    cos(2*I*c).series(2*I*c, n=N).removeO(): cos(2*I*c),
+                    cos(-2*I*c).series(-2*I*c, n=N).removeO(): cos(-2*I*c),
+                    #
                     sin(c_fs).series(c_fs, n=N).removeO(): sin(c_fs),
                     cos(c_fs).series(c_fs, n=N).removeO(): cos(c_fs),
                     (sin(c_fs)/2).series(c_fs, n=N).removeO(): sin(c_fs)/2,
