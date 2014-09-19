@@ -13,7 +13,7 @@ debug = False
 #
 # IPython notebook related functions
 #
-from IPython.display import display_latex
+#from IPython.display import display_latex
 from IPython.display import Latex
 
 def show_first_few_terms(e, n=10):
@@ -22,6 +22,45 @@ def show_first_few_terms(e, n=10):
         e = Add(*(e_args_trunc))
     
     return Latex("$" + latex(e).replace("dag", "dagger") + r"+ \dots$")
+
+
+class OperatorFunction(Operator):
+
+    @property
+    def operator(self):
+        return self.args[0]
+
+    @property
+    def variable(self):
+        return self.args[1]
+
+    @classmethod
+    def default_args(self):
+        return (Operator("a"), Symbol("t"))
+
+    def __call__(self, value):
+        return OperatorFunction(self.operator, value)
+    
+    def __new__(cls, *args, **hints):
+        if not len(args) in [2]:
+            raise ValueError('2 parameters expected, got %s' % str(args))
+
+        return Operator.__new__(cls, *args)
+
+    def _eval_commutator_OperatorFunction(self, other, **hints):
+        if self.operator.args[0] == other.operator.args[0]:
+            if str(self.variable) == str(other.variable):
+                return Commutator(self.operator, other.operator).doit()
+
+        return None
+
+    def _eval_adjoint(self):
+        return OperatorFunction(Dagger(self.operator), self.variable)
+    
+    def _print_contents_latex(self, printer, *args):
+        return r'{{%s}(%s)}' % (latex(self.operator), latex(self.variable))
+
+
 
 #
 # Functions for use with sympy.physics.quantum
