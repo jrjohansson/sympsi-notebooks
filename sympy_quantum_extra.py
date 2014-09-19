@@ -248,7 +248,7 @@ def bch_expansion(A, B, N=6, collect_operators=None, independent=False,
             return qsimplify(e_collected.subs({
                     exp(c).series(c, n=N).removeO(): exp(c), #c
                     exp(-c).series(-c, n=N).removeO(): exp(-c), #-c
-                    exp(2*c).series(c, n=N).removeO(): exp(2*c), #c
+                    exp(2*c).series(2*c, n=N).removeO(): exp(2*c), #c
                     exp(-2*c).series(-2*c, n=N).removeO(): exp(-2*c), #-c, list(c.free_symbols)[0]
                     #
                     cosh(c).series(c, n=N).removeO(): cosh(c),
@@ -260,8 +260,13 @@ def bch_expansion(A, B, N=6, collect_operators=None, independent=False,
                     #
                     sin(c).series(c, n=N).removeO(): sin(c),
                     cos(c).series(c, n=N).removeO(): cos(c),
-                    sin(2*c).series(c, n=N).removeO(): sin(2*c),
-                    cos(2*c).series(c, n=N).removeO(): cos(2*c),
+                    sin(2*c).series(2*c, n=N).removeO(): sin(2*c),
+                    cos(2*c).series(2*c, n=N).removeO(): cos(2*c),
+                    sin(2*I*c).series(2*I*c, n=N).removeO(): sin(2*I*c),
+                    sin(-2*I*c).series(-2*I*c, n=N).removeO(): sin(-2*I*c),
+                    cos(2*I*c).series(2*I*c, n=N).removeO(): cos(2*I*c),
+                    cos(-2*I*c).series(-2*I*c, n=N).removeO(): cos(-2*I*c),
+                    #
                     sin(c_fs).series(c_fs, n=N).removeO(): sin(c_fs),
                     cos(c_fs).series(c_fs, n=N).removeO(): cos(c_fs),
                     (sin(c_fs)/2).series(c_fs, n=N).removeO(): sin(c_fs)/2,
@@ -370,8 +375,27 @@ def drop_terms_containing(e, e_drops):
     """
     if isinstance(e, Add):
         # fix this
-        e = Add(*(arg for arg in e.args if not any([e_drop in arg.args
-                                                       for e_drop in e_drops])))
+        #e = Add(*(arg for arg in e.args if not any([e_drop in arg.args
+        #                                               for e_drop in e_drops])))
+                                                       
+        new_args = []
+        
+        for term in e.args:
+            
+            keep = True
+            for e_drop in e_drops:
+                if e_drop in term.args:
+                    keep = False
+                    
+                if isinstance(e_drop, Mul):
+                    if all([(f in term.args) for f in e_drop.args]):
+                        keep = False
+            
+            if keep:
+        #        new_args.append(arg)
+                new_args.append(term)
+        e = Add(*new_args)
+                                                       
         #e = Add(*(arg.subs({key: 0 for key in e_drops}) for arg in e.args))
 
     return e
