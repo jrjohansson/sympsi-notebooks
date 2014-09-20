@@ -34,6 +34,10 @@ class OperatorFunction(Operator):
     def variable(self):
         return self.args[1]
 
+    @property
+    def free_symbols(self):
+        return self.operator.free_symbols.union(self.variable.free_symbols)
+
     @classmethod
     def default_args(self):
         return (Operator("a"), Symbol("t"))
