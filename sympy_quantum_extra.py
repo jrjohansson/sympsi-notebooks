@@ -16,6 +16,106 @@ debug = False
 #from IPython.display import display_latex
 from IPython.display import Latex
 
+class Covariance(Expr):
+    """Covariance of two operators, expressed in terms of bracket <A, B>
+    
+    Parameters
+    ==========
+    
+    A : Expr
+        
+    """
+    is_commutative = True
+    
+    def __new__(cls, A, B):
+        return Expr.__new__(cls, A, B)
+    
+    def _eval_expand_covariance(self, **hints):        
+        A, B = self.args
+        # <A + B, C> = <A, C> + <B, C>
+        if isinstance(A, Add):
+            return Add(*(Covariance(a, B).expand() for a in A.args))
+        # <A, B + C> = <A, B> + <A, C>
+        if isinstance(B, Add):
+            return Add(*(Covariance(A, b).expand() for b in B.args))
+        
+        if isinstance(A, Mul):
+            A = A.expand()            
+            cA, ncA = A.args_cnc()
+            return Mul(Mul(*cA), Covariance(Mul._from_args(ncA), B).expand())
+        if isinstance(B, Mul):
+            B = B.expand()            
+            cB, ncB = B.args_cnc()
+            return Mul(Mul(*cB), Covariance(A, Mul._from_args(ncB)).expand())        
+        if isinstance(A, Integral):
+            # <∫adx, B> ->  ∫<a, B>dx
+            func, lims = A.function, A.limits
+            new_args = [Covariance(func, B).expand()]
+            for lim in lims:
+                new_args.append(lim)
+            return Integral(*new_args)
+        if isinstance(B, Integral):
+            # <A, ∫bdx> ->  ∫<A, b>dx
+            func, lims = B.function, B.limits
+            new_args = [Covariance(A, func).expand()]
+            for lim in lims:
+                new_args.append(lim)
+            return Integral(*new_args)
+        return self
+    
+    def doit(self, **hints):
+        """ Evaluate covariance of two operators A and B """
+        A = self.args[0]
+        B = self.args[1]
+
+        return Expectation(A*B) - Expectation(A) * Expectation(B)
+    
+    def _latex(self, printer, *args):
+        return r"\left\langle %s, %s \right\rangle" % tuple([
+            printer._print(arg, *args) for arg in self.args])
+
+class Expectation(Expr):
+    """Expectation Value of an operator, expressed in terms of bracket <A>
+    
+    Parameters
+    ==========
+    
+    A : Expr
+        The argument of the expectation value <A>
+    """
+    is_commutative = True
+    
+    def __new__(cls, A):
+        return Expr.__new__(cls, A)
+    
+    def _eval_expand_expectation(self, **hints):
+        A = self.args[0]
+        if isinstance(A, Add):
+        # <A + B> = <A> + <B>
+            return Add(*(Expectation(a).expand() for a in A.args))
+
+        if isinstance(A, Mul):
+        # <c A> = c<A> where c is a commutative term
+            A = A.expand()
+            cA, ncA = A.args_cnc()
+            return Mul(Mul(*cA), Expectation(Mul._from_args(ncA)).expand())
+        
+        if isinstance(A, Integral):
+            # <∫adx> ->  ∫<a>dx
+            func, lims = A.function, A.limits
+            new_args = [Expectation(func).expand()]
+            for lim in lims:
+                new_args.append(lim)
+            return Integral(*new_args)
+        
+        return self
+    
+    def eval_state(self, state):
+        return qapply(Dagger(state) * self.args[0] * state, dagger=True).doit()
+    
+    def _latex(self, printer, *args):
+        return r"\left\langle %s \right\rangle" % printer._print(self.args[0], *args)
+
 def show_first_few_terms(e, n=10):
     if isinstance(e, Add):
         e_args_trunc = e.args[0:n]
@@ -23,6 +123,104 @@ def show_first_few_terms(e, n=10):
     
     return Latex("$" + latex(e).replace("dag", "dagger") + r"+ \dots$")
 
+def exchange_integral_order(e):
+    """
+    exchanging integral order. Works in this way:
+    ∫(∫ ... (∫(∫    dx_0)dx_1)... dx_n-1)dx_n -->  ∫(∫ ... (∫(∫  dx_1)dx_2)... dx_n)dx_0
+    """
+    if isinstance(e, Add):
+        return Add(*[exchange_integral_order(arg) for arg in e.args])
+    elif isinstance(e, Mul):
+        return Mul(*[exchange_integral_order(arg) for arg in e.args])
+    if isinstance(e, Integral):
+        i = push_inwards(e)
+        func, lims = i.function, i.limits
+        if len(lims)>1:
+            args = [func]
+            for idx in range(1, len(lims)):
+                args.append(lims[idx])
+            args.append(lims[0])
+            return(Integral(*args))
+        else:
+            return e
+    else:
+        return e
+        
+def pull_outwards(e, _n=0):
+    """ 
+    Trick to maximally pull out constant elements from the integrand,
+    and expand terms inside the integrand.
+    """
+    if _n > 20:
+        warnings.warn("Too high level or recursion, aborting")
+        return e
+    if isinstance(e, Add):
+        return Add(*[pull_outwards(arg, _n=_n+1) for arg in e.args]).expand()
+    if isinstance(e, Mul):
+        return Mul(*[pull_outwards(arg, _n=_n+1) for arg in e.args]).expand()
+    elif isinstance(e, Integral):
+        func = pull_outwards(e.function)
+        dummy_var = e.variables
+        if isinstance(func, Add):
+            add_args = []
+            for term in func.args:
+                args = [term]
+                for lim in e.limits:
+                    args.append(lim)
+                add_args.append(Integral(*args))
+            e_new = Add(*add_args)
+            return pull_outwards(e_new, _n=_n+1)
+        elif isinstance(func, Mul):
+            non_integral = Mul(*[arg for arg in func.args if not isinstance(arg, Integral)])
+            integrals    = Mul(*[arg for arg in func.args if isinstance(arg, Integral)])
+
+            const = Mul(*[arg for arg in non_integral.args if dummy_var[0] not in arg.free_symbols])
+            nonconst = Mul(*[arg for arg in non_integral.args if dummy_var[0] in arg.free_symbols])
+            if const==1:
+                return e
+            else:
+                if len(dummy_var)==1:
+                    return const * Integral(nonconst * integrals, e.limits[0])
+                else:
+                    args = [const * Integral(nonconst * integrals, e.limits[0])]
+                    for lim in e.limits[1:]:
+                        args.append(lim)
+                    return pull_outwards(Integral(*args), _n=_n+1)
+        else:
+            return e
+    else:
+        return e
+        
+def push_inwards(e, _n=0):
+    """
+    Trick to push every factors into integrand
+    """
+    if _n > 20:
+        warnings.warn("Too high level or recursion, aborting")
+        return e    
+    if isinstance(e, Add):
+        return Add(*[push_inwards(arg, _n=_n+1) for arg in e.args])
+    elif isinstance(e, Mul):
+        c = Mul(*[arg for arg in e.args if not isinstance(arg, Integral)])
+        i_in = Mul(*[arg for arg in e.args if isinstance(arg, Integral)])
+        if isinstance(i_in, Integral):
+            func_in = i_in.function
+            args = [c * func_in]
+            for lim_in in i_in.limits:
+                args.append(lim_in)
+            return push_inwards(Integral(*args), _n=_n+1)
+        else:
+            return e
+    elif isinstance(e, Integral):
+        func = e.function
+        new_func = push_inwards(func, _n=_n+1)
+
+        args = [new_func]
+        for lim in e.limits:
+            args.append(lim)
+        return Integral(*args)
+    else:
+        return e
 
 class OperatorFunction(Operator):
 
@@ -33,6 +231,10 @@ class OperatorFunction(Operator):
     @property
     def variable(self):
         return self.args[1]
+
+    @property
+    def free_symbols(self):
+        return self.operator.free_symbols.union(self.variable.free_symbols)
 
     @classmethod
     def default_args(self):
