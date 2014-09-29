@@ -161,6 +161,11 @@ class Expectation(Expr):
     
     """
     is_commutative = True
+
+    @property    
+    def expression(self):
+        return self.args[0]
+
     @property    
     def is_normal_order(self):
         return bool(self.args[1])
@@ -181,11 +186,11 @@ class Expectation(Expr):
     def _eval_expand_expectation(self, **hints):
         A = self.args[0]
         if isinstance(A, Add):
-        # <A + B> = <A> + <B>
-            return Add(*(Expectation(a, self.is_normal_order).expand() for a in A.args))
+            # <A + B> = <A> + <B>
+            return Add(*(Expectation(a, self.is_normal_order).expand(expectation=True) for a in A.args))
 
         if isinstance(A, Mul):
-        # <c A> = c<A> where c is a commutative term
+            # <c A> = c<A> where c is a commutative term
             A = A.expand()
             cA, ncA = A.args_cnc()
             return Mul(Mul(*cA), Expectation(Mul._from_args(ncA), self.is_normal_order).expand())
