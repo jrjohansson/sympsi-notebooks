@@ -77,21 +77,25 @@ class Covariance(Expr):
     
     def _eval_expand_covariance(self, **hints):        
         A, B = self.args[0], self.args[1]
-        # <A + B, C> = <A, C> + <B, C>
+
         if isinstance(A, Add):
+            # <A + B, C> = <A, C> + <B, C>
             return Add(*(Covariance(a, B, self.is_normal_order).expand() for a in A.args))
-        # <A, B + C> = <A, B> + <A, C>
+
         if isinstance(B, Add):
+            # <A, B + C> = <A, B> + <A, C>
             return Add(*(Covariance(A, b, self.is_normal_order).expand() for b in B.args))
         
         if isinstance(A, Mul):
             A = A.expand()            
             cA, ncA = A.args_cnc()
             return Mul(Mul(*cA), Covariance(Mul._from_args(ncA), B, self.is_normal_order).expand())
+
         if isinstance(B, Mul):
             B = B.expand()            
             cB, ncB = B.args_cnc()
             return Mul(Mul(*cB), Covariance(A, Mul._from_args(ncB), self.is_normal_order).expand())        
+
         if isinstance(A, Integral):
             # <∫adx, B> ->  ∫<a, B>dx
             func, lims = A.function, A.limits
@@ -99,6 +103,7 @@ class Covariance(Expr):
             for lim in lims:
                 new_args.append(lim)
             return Integral(*new_args)
+
         if isinstance(B, Integral):
             # <A, ∫bdx> ->  ∫<A, b>dx
             func, lims = B.function, B.limits
