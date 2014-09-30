@@ -16,6 +16,7 @@ debug = False
 #from IPython.display import display_latex
 from IPython.display import Latex
 
+<<<<<<< HEAD
 class Covariance(Expr):
     """Covariance of two operators, expressed in terms of bracket <A, B>
     
@@ -221,6 +222,8 @@ class Expectation(Expr):
             return r"\left\langle: %s :\right\rangle" % printer._print(self.args[0], *args)
         else:
             return r"\left\langle %s \right\rangle" % printer._print(self.args[0], *args)
+=======
+>>>>>>> 9d043c6f54426b0d4a5feee7e7058f0565918f48
 
 def show_first_few_terms(e, n=10):
     if isinstance(e, Add):
