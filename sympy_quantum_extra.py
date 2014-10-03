@@ -7,14 +7,15 @@ from sympy.physics.quantum import *
 from sympy.physics.quantum.boson import *
 from sympy.physics.quantum.fermion import *
 from sympy.physics.quantum.operatorordering import *
+from sympy.physics.quantum.expectation import Expectation
 
 debug = False
 
-#
+# -----------------------------------------------------------------------------
 # IPython notebook related functions
 #
 #from IPython.display import display_latex
-from IPython.display import Latex
+from IPython.display import Latex, HTML
 
 
 
@@ -25,6 +26,20 @@ def show_first_few_terms(e, n=10):
     
     return Latex("$" + latex(e).replace("dag", "dagger") + r"+ \dots$")
 
+
+def html_table(data):
+    t_table = "<table>\n%s\n</table>"
+    t_row = "<tr>%s</tr>"
+    t_col = "<td>%s</td>"
+    table_code = t_table % "".join([t_row % "".join([t_col % ("$%s$" % latex(col).replace(r'\dag', r'\dagger'))
+                                                     for col in row])
+                                    for row in data])
+    return HTML(table_code)
+
+
+# -----------------------------------------------------------------------------
+# Simplification of integrals
+#
 def exchange_integral_order(e):
     """
     exchanging integral order. Works in this way:
@@ -37,7 +52,7 @@ def exchange_integral_order(e):
     if isinstance(e, Integral):
         i = push_inwards(e)
         func, lims = i.function, i.limits
-        if len(lims)>1:
+        if len(lims) > 1:
             args = [func]
             for idx in range(1, len(lims)):
                 args.append(lims[idx])
@@ -45,7 +60,8 @@ def exchange_integral_order(e):
             return(Integral(*args))
     else:
         return e
-        
+
+
 def pull_outwards(e, _n=0, expand_add=False):
     """ 
     Trick to maximally pull out constant elements from the integrand,
@@ -77,10 +93,10 @@ def pull_outwards(e, _n=0, expand_add=False):
 
             const = Mul(*[arg for arg in non_integral.args if dummy_var[0] not in arg.free_symbols])
             nonconst = Mul(*[arg for arg in non_integral.args if dummy_var[0] in arg.free_symbols])
-            if const==1:
+            if const == 1:
                 return e
             else:
-                if len(dummy_var)==1:
+                if len(dummy_var) == 1:
                     return const * Integral(nonconst * integrals, e.limits[0])
                 else:
                     args = [const * Integral(nonconst * integrals, e.limits[0])]
@@ -89,14 +105,15 @@ def pull_outwards(e, _n=0, expand_add=False):
                     return pull_outwards(Integral(*args), _n=_n+1)
     else:
         return e
-        
+
+
 def push_inwards(e, _n=0):
     """
     Trick to push every factors into integrand
     """
     if _n > 20:
         warnings.warn("Too high level or recursion, aborting")
-        return e    
+        return e
     if isinstance(e, Add):
         return Add(*[push_inwards(arg, _n=_n+1) for arg in e.args])
     if isinstance(e, Mul):
@@ -121,63 +138,23 @@ def push_inwards(e, _n=0):
     else:
         return e
 
-class OperatorFunction(Operator):
 
-    @property
-    def operator(self):
-        return self.args[0]
-
-    @property
-    def variable(self):
-        return self.args[1]
-
-    @property
-    def free_symbols(self):
-        return self.operator.free_symbols.union(self.variable.free_symbols)
-
-    @classmethod
-    def default_args(self):
-        return (Operator("a"), Symbol("t"))
-
-    def __call__(self, value):
-        return OperatorFunction(self.operator, value)
-    
-    def __new__(cls, *args, **hints):
-        if not len(args) in [2]:
-            raise ValueError('2 parameters expected, got %s' % str(args))
-
-        return Operator.__new__(cls, *args)
-
-    def _eval_commutator_OperatorFunction(self, other, **hints):
-        if self.operator.args[0] == other.operator.args[0]:
-            if str(self.variable) == str(other.variable):
-                return Commutator(self.operator, other.operator).doit()
-
-        return None
-
-    def _eval_adjoint(self):
-        return OperatorFunction(Dagger(self.operator), self.variable)
-    
-    def _print_contents_latex(self, printer, *args):
-        return r'{{%s}(%s)}' % (latex(self.operator), latex(self.variable))
-
-
-
-#
-# Functions for use with sympy.physics.quantum
+# -----------------------------------------------------------------------------
+# Simplification of quantum expressions
 #
 def qsimplify(e_orig, _n=0):
-    
+    """
+    Simplify an expression containing operators.
+    """    
     if _n > 15:
         warnings.warn("Too high level or recursion, aborting")
         return e_orig
 
     e = normal_ordered_form(e_orig)
-    
+
     if isinstance(e, Add):
         return Add(*(qsimplify(arg, _n=_n+1) for arg in e.args))
 
-    
     elif isinstance(e, Mul):
         args1 = tuple(arg for arg in e.args if arg.is_commutative)
         args2 = tuple(arg for arg in e.args if not arg.is_commutative)
@@ -188,47 +165,29 @@ def qsimplify(e_orig, _n=0):
         x = 1
         for y in reversed(args2):
             x = y * x
-            
+
         if isinstance(x, Mul):
             args2 = x.args
             x = 1
             for y in args2:
                 x = x * y
-            
-            
+
         e_new = simplify(Mul(*args1)) * x
 
         if e_new == e:
             return e
         else:
             return qsimplify(e_new.expand(), _n=_n+1)
-   
 
     if e == e_orig:
         return e
     else:
         return qsimplify(e, _n=_n+1).expand()
 
-def recursive_commutator(a, b, n=1):
-    return Commutator(a, b) if n == 1 else Commutator(a, recursive_commutator(a, b, n-1))
 
-
-def _bch_expansion(A, B, N=10):
-    """
-    Baker–Campbell–Hausdorff formula:
-    
-    e^{A} B e^{-A} = B + 1/(1!)[A, B] + 1/(2!)[A, [A, B]] + 1/(3!)[A, [A, [A, B]]] + ...
-                   = B + Sum_n^N 1/(n!)[A, B]^n
-                   
-    Truncate the sum at N terms.
-    """
-    e = B
-    for n in range(1, N):
-        e += recursive_commutator(A, B, n=n) / factorial(n)
-    
-    return e
-
-
+# -----------------------------------------------------------------------------
+# Commutators and BCH expansions
+#
 def split_coeff_operator(e):
     """
     Split a product of coefficients, commuting variables and quantum operators
@@ -261,7 +220,7 @@ def split_coeff_operator(e):
                     o_args.append(o ** arg.exp)
             else:
                 c_args.append(arg)
-                
+        
         return Mul(*c_args), Mul(*o_args)
 
     if isinstance(e, Add):
@@ -333,6 +292,96 @@ def extract_operator_products(e, independent=False):
                              (type(no_op), no_op))
 
     return list(set(no_ops))
+
+def drop_terms_containing(e, e_drops):
+    """
+    Drop terms contaning factors in the list e_drops
+    """
+    if isinstance(e, Add):
+        # fix this
+        #e = Add(*(arg for arg in e.args if not any([e_drop in arg.args
+        #                                               for e_drop in e_drops])))
+                                                       
+        new_args = []
+        
+        for term in e.args:
+            
+            keep = True
+            for e_drop in e_drops:
+                if e_drop in term.args:
+                    keep = False
+                    
+                if isinstance(e_drop, Mul):
+                    if all([(f in term.args) for f in e_drop.args]):
+                        keep = False
+            
+            if keep:
+        #        new_args.append(arg)
+                new_args.append(term)
+        e = Add(*new_args)
+                                                       
+        #e = Add(*(arg.subs({key: 0 for key in e_drops}) for arg in e.args))
+
+    return e
+
+
+def drop_c_number_terms(e):
+    """
+    Drop commuting terms from the expression e
+    """
+    if isinstance(e, Add):
+        return Add(*(arg for arg in e.args if not arg.is_commutative))
+
+    return e
+
+def subs_single(O, subs_map):
+
+    if isinstance(O, Operator):
+        if O in subs_map:
+            return subs_map[O]
+        else:
+            print("warning: unresolved operator: ", O)
+            return O
+    elif isinstance(O, Add):
+        new_args = []
+        for arg in O.args:
+            new_args.append(subs_single(arg, subs_map))
+        return Add(*new_args)
+
+    elif isinstance(O, Mul):
+        new_args = []
+        for arg in O.args:
+            new_args.append(subs_single(arg, subs_map))
+        return Mul(*new_args)
+
+    elif isinstance(O, Pow):
+        return Pow(subs_single(O.base, subs_map), O.exp)
+
+    else:
+        return O
+
+
+# -----------------------------------------------------------------------------
+# Commutators and BCH expansions
+#
+def recursive_commutator(a, b, n=1):
+    return Commutator(a, b) if n == 1 else Commutator(a, recursive_commutator(a, b, n-1))
+
+
+def _bch_expansion(A, B, N=10):
+    """
+    Baker–Campbell–Hausdorff formula:
+    
+    e^{A} B e^{-A} = B + 1/(1!)[A, B] + 1/(2!)[A, [A, B]] + 1/(3!)[A, [A, [A, B]]] + ...
+                   = B + Sum_n^N 1/(n!)[A, B]^n
+                   
+    Truncate the sum at N terms.
+    """
+    e = B
+    for n in range(1, N):
+        e += recursive_commutator(A, B, n=n) / factorial(n)
+    
+    return e
 
 
 def bch_expansion(A, B, N=6, collect_operators=None, independent=False,
@@ -425,38 +474,14 @@ def bch_expansion(A, B, N=6, collect_operators=None, independent=False,
         return e_collected
 
 
-def subs_single(O, subs_map):
-
-    if isinstance(O, Operator):
-        if O in subs_map:
-            return subs_map[O]
-        else:
-            print("warning: unresolved operator: ", O)
-            return O
-    elif isinstance(O, Add):
-        new_args = []
-        for arg in O.args:
-            new_args.append(subs_single(arg, subs_map))
-        return Add(*new_args)
-
-    elif isinstance(O, Mul):
-        new_args = []
-        for arg in O.args:
-            new_args.append(subs_single(arg, subs_map))
-        return Mul(*new_args)
-
-    elif isinstance(O, Pow):
-        return Pow(subs_single(O.base, subs_map), O.exp)
-
-    else:
-        return O
-
-
+# -----------------------------------------------------------------------------
+# Transformations
+#
 def unitary_transformation(U, O, N=6, collect_operators=None,
                            independent=False, allinone=False,
                            expansion_search=True):
     """
-    Perform a unitary transformation 
+    Perform a unitary transformation
 
         O = U O U^\dagger
 
@@ -464,13 +489,13 @@ def unitary_transformation(U, O, N=6, collect_operators=None,
     operator expression.
     """
     if not isinstance(U, exp):
-        raise ValueError("U must be a unitary operator on the form U = exp(A)")    
+        raise ValueError("U must be a unitary operator on the form "
+                         "U = exp(A)")
 
     A = U.exp
 
     if debug:
         print("unitary_transformation: using A = ", A)
-
 
     if allinone:
         return bch_expansion(A, O, N=N, collect_operators=collect_operators,
@@ -481,20 +506,20 @@ def unitary_transformation(U, O, N=6, collect_operators=None,
         ops_subs = {op: bch_expansion(A, op, N=N,
                                       collect_operators=collect_operators,
                                       independent=independent,
-                                       expansion_search=expansion_search)
+                                      expansion_search=expansion_search)
                     for op in ops}
 
-        #return O.subs(ops_subs)
+        #return O.subs(ops_subs, simultaneous=True) # XXX: this this
         return subs_single(O, ops_subs)
 
 
-def hamiltonian_transformation(U, H, N=6, collect_operators=None, independent=False,
-                               expansion_search=True):
+def hamiltonian_transformation(U, H, N=6, collect_operators=None,
+                               independent=False, expansion_search=True):
     """
     Apply an unitary basis transformation to the Hamiltonian H:
-    
+
         H = U H U^\dagger -i U d/dt(U^\dagger)
-    
+
     """
     t = [s for s in U.exp.free_symbols if str(s) == 't']
     if t:
@@ -502,50 +527,186 @@ def hamiltonian_transformation(U, H, N=6, collect_operators=None, independent=Fa
         H_td = - I * U * diff(exp(-U.exp), t)
     else:
         H_td = 0
-        
+
     #H_td = I * diff(U, t) * exp(- U.exp)  # hack: Dagger(U) = exp(-U.exp)
-    H_st = unitary_transformation(U, H, N=N, collect_operators=collect_operators,
-                                  independent=independent, expansion_search=expansion_search)
+    H_st = unitary_transformation(U, H, N=N,
+                                  collect_operators=collect_operators,
+                                  independent=independent,
+                                  expansion_search=expansion_search)
     return H_st + H_td
 
 
-def drop_terms_containing(e, e_drops):
+# ----------------------------------------------------------------------------
+# Master equations and adjoint master equations
+#
+def lindblad_dissipator(a, rho):
     """
-    Drop terms contaning factors in the list e_drops
+    Lindblad dissipator
     """
-    if isinstance(e, Add):
-        # fix this
-        #e = Add(*(arg for arg in e.args if not any([e_drop in arg.args
-        #                                               for e_drop in e_drops])))
-                                                       
-        new_args = []
+    return (a * rho * Dagger(a) - rho * Dagger(a) * a / 2
+            - Dagger(a) * a * rho / 2)
+
+
+def master_equation(rho_t, t, H, a_ops):
+    """
+    Lindblad master equation
+    """
+    #t = [s for s in rho_t.free_symbols if isinstance(s, Symbol)][0]
+    return Eq(diff(rho_t, t),
+            -I * Commutator(H, rho_t) +
+            sum([lindblad_dissipator(a, rho_t) for a in a_ops]))
+
+
+def operator_lindblad_dissipator(a, rho):
+    """
+    Lindblad operator dissipator
+    """
+    return (Dagger(a) * rho * a - rho * Dagger(a) * a / 2
+            - Dagger(a) * a * rho / 2)
+
+
+def operator_master_equation(op_t, t, H, a_ops, use_eq=True):
+    """
+    Adjoint master equation
+    """
+    rhs = diff(op_t, t)
+    lhs = (I * Commutator(H, op_t) +
+           sum([operator_lindblad_dissipator(a, op_t) for a in a_ops]))
+    
+    if use_eq:
+        return Eq(rhs, lhs)
+    else:
+        return rhs, lhs
+
+# -----------------------------------------------------------------------------
+# Semiclassical equations of motion
+#
+def operator_order(op):
+    if isinstance(op, Operator):
+        return 1
+    
+    if isinstance(op, Mul):
+        return sum([operator_order(arg) for arg in op.args]) 
+
+    if isinstance(op, Pow):
+        return operator_order(op.base) * op.exp 
+
+    return 0
+
+
+def operator_sort_by_order(ops):
+    return sorted(ops, key=operator_order)
+
+
+def _extract_operators(e_orig):  # duplicate ?
+
+    debug = False
+    if debug:
+        print("_extract_operators: ", e_orig)
+    
+    if isinstance(e_orig, Operator):
+        return [e_orig]
+
+    e = drop_c_number_terms(normal_ordered_form(e_orig.expand(), independent=True))
+
+    if isinstance(e, Pow) and isinstance(e.base, Operator):
+        return [e]
+
+    ops = []
         
-        for term in e.args:
-            
-            keep = True
-            for e_drop in e_drops:
-                if e_drop in term.args:
-                    keep = False
-                    
-                if isinstance(e_drop, Mul):
-                    if all([(f in term.args) for f in e_drop.args]):
-                        keep = False
-            
-            if keep:
-        #        new_args.append(arg)
-                new_args.append(term)
-        e = Add(*new_args)
-                                                       
-        #e = Add(*(arg.subs({key: 0 for key in e_drops}) for arg in e.args))
-
-    return e
-
-
-def drop_c_number_terms(e):
-    """
-    Drop commuting terms from the expression e
-    """
     if isinstance(e, Add):
-        return Add(*(arg for arg in e.args if not arg.is_commutative))
+        for arg in e.args:
+            ops += _extract_operators(arg)
+
+    if isinstance(e, Mul):
+        op_f = [f for f in e.args if isinstance(f, Operator) or (isinstance(f, Pow) and isinstance(f.base, Operator))]
+        ops.append(Mul(*op_f))        
+        ops += op_f
+    
+    unique_ops = list(set(ops))
+    
+    sorted_unique_ops = sorted(unique_ops, key=operator_order)
+    
+    return sorted_unique_ops
+
+
+def _operator_to_func(e, op_func_map):
+    
+    if isinstance(e, Expectation):
+        if e.expression in op_func_map:
+            return op_func_map[e.expression]
+        else:
+            return e.expression
+    
+    if isinstance(e, Add):
+        return Add(*(_operator_to_func(term, op_func_map) for term in e.args))
+
+    if isinstance(e, Mul):
+        return Mul(*(_operator_to_func(factor, op_func_map) for factor in e.args))
 
     return e
+    
+    
+def semi_classical_eqm(H, c_ops, N=20):
+    
+    op_eqm = {}
+    
+    ops = _extract_operators(H + sum(c_ops))
+    
+    print("Hamiltonian operators: ", ops)
+
+    t = symbols("t", positive=True)
+    
+    n = 0
+    while ops:
+        
+        if n > N:
+            print("breaking on large n (%d > %d)" % (n, N))
+            break
+
+        n += 1
+
+        _, idx = min((val, idx) for (idx, val) in enumerate([operator_order(op) for op in ops]))
+        
+        op = ops.pop(idx)
+        
+        lhs, rhs = operator_master_equation(op, t, H, c_ops, use_eq=False)
+        
+        op_eqm[op] = qsimplify(normal_ordered_form(rhs.doit(independent=True).expand(), independent=True))
+    
+        new_ops = _extract_operators(op_eqm[op])
+        
+        for new_op in new_ops:
+            if (not new_op.is_Number) and new_op not in op_eqm.keys() and new_op not in ops:
+                print(new_op, "not included, adding")
+                ops.append(new_op)
+    
+    print("unresolved ops: ", ops)
+    
+    for op, eqm in op_eqm.items():
+        op_eqm[op] = drop_terms_containing(op_eqm[op], ops)
+    
+    for op, eqm in op_eqm.items():
+        for o in _extract_operators(eqm):
+            if o not in op_eqm.keys():
+                print("Unresolved operator: ", o)
+
+    sc_eqm = {}
+    for op, eqm in op_eqm.items():
+        sc_eqm[Expectation(op)] = Expectation(eqm).expand(expectation=True)
+
+    op_func_map = {}
+    for n, op in enumerate(op_eqm):
+        op_func_map[op] = Function("A%d" % n)(t)
+
+    print("Operator -> Function map: ", op_func_map)
+
+    sc_ode = {}
+    for op, eqm in sc_eqm.items():
+        sc_ode[op] = Eq(Derivative(_operator_to_func(op, op_func_map), t),
+                                   _operator_to_func(eqm, op_func_map))
+
+    #for eqm in op_eqm:
+    #    eqm_ops = _extract_operators(op_eqm[op])
+
+    return op_eqm, sc_eqm, sc_ode, op_func_map
