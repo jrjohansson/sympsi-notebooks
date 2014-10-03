@@ -46,7 +46,7 @@ def exchange_integral_order(e):
     else:
         return e
         
-def pull_outwards(e, _n=0):
+def pull_outwards(e, _n=0, expand_add=False):
     """ 
     Trick to maximally pull out constant elements from the integrand,
     and expand terms inside the integrand.
@@ -59,9 +59,10 @@ def pull_outwards(e, _n=0):
     if isinstance(e, Mul):
         return Mul(*[pull_outwards(arg, _n=_n+1) for arg in e.args]).expand()
     if isinstance(e, Integral):
-        func = pull_outwards(e.function)
+        func = pull_outwards(e.function, _n=_n+1).factor()
         dummy_var = e.variables
-        if isinstance(func, Add):
+        if add and isinstance(func.expand(), Add):
+            func = func.expand()
             add_args = []
             for term in func.args:
                 args = [term]
@@ -86,8 +87,6 @@ def pull_outwards(e, _n=0):
                     for lim in e.limits[1:]:
                         args.append(lim)
                     return pull_outwards(Integral(*args), _n=_n+1)
-        else:
-            return e
     else:
         return e
         
@@ -108,12 +107,12 @@ def push_inwards(e, _n=0):
             args = [c * func_in]
             for lim_in in i_in.limits:
                 args.append(lim_in)
-            return push_inwards(Integral(*args), _n=_n+1)
+            return push_inwards(Integral(*args).expand(), _n=_n+1)
         else:
             return e
     if isinstance(e, Integral):
         func = e.function
-        new_func = push_inwards(func, _n=_n+1)
+        new_func = push_inwards(func.expand(), _n=_n+1)
 
         args = [new_func]
         for lim in e.limits:
