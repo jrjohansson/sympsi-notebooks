@@ -9,6 +9,9 @@ from sympy.physics.quantum.fermion import *
 from sympy.physics.quantum.operatorordering import *
 from sympy.physics.quantum.expectation import Expectation
 
+from sympy.physics.quantum.pauli import (SigmaX, SigmaY, SigmaZ, SigmaMinus,
+                                         SigmaPlus)
+
 debug = False
 
 # -----------------------------------------------------------------------------
@@ -149,6 +152,24 @@ def push_inwards(e, _n=0):
 # -----------------------------------------------------------------------------
 # Simplification of quantum expressions
 #
+
+def expression_tree_transform(e, transformations):
+    """
+    Traverse and exressions three and conditionally apply a transform on the
+    nodes in the tree.
+    """
+    for cond_func, trans_func in transformations:
+        if cond_func(e):
+            return trans_func(e)
+
+    if isinstance(e, (Add, Mul, Pow, exp)):
+        t = type(e)
+        return t(*(expression_tree_transform(arg, transformations)
+                   for arg in e.args))
+    else:
+        return e
+
+
 def qsimplify(e_orig, _n=0):
     """
     Simplify an expression containing operators.
@@ -161,6 +182,12 @@ def qsimplify(e_orig, _n=0):
 
     if isinstance(e, Add):
         return Add(*(qsimplify(arg, _n=_n+1) for arg in e.args))
+
+    elif isinstance(e, Pow):
+        return Pow(*(qsimplify(arg, _n=_n+1) for arg in e.args))
+
+    elif isinstance(e, exp):
+        return exp(*(qsimplify(arg, _n=_n+1) for arg in e.args))
 
     elif isinstance(e, Mul):
         args1 = tuple(arg for arg in e.args if arg.is_commutative)
@@ -192,8 +219,36 @@ def qsimplify(e_orig, _n=0):
         return qsimplify(e, _n=_n+1).expand()
 
 
+def pauli_represent_minus_plus(e):
+    """
+    Traverse an expression and change all instances of SigmaX and SigmaY
+    to the corresponding expressions using SigmaMinus and SigmaPlus.
+    """
+    # XXX: todo, make sure that new operators inherit labels
+    return expression_tree_transform(
+        e, [(lambda e: isinstance(e, SigmaX),
+             lambda e: SigmaMinus() + SigmaPlus()),
+            (lambda e: isinstance(e, SigmaY),
+             lambda e: I * SigmaMinus() - I * SigmaPlus())]
+        )
+
+
+def pauli_represent_x_y(e):
+    """
+    Traverse an expression and change all instances of SigmaMinus and SigmaPlus
+    to the corresponding expressions using SigmaX and SigmaY.
+    """
+    # XXX: todo, make sure that new operators inherit labels
+    return expression_tree_transform(
+        e, [(lambda e: isinstance(e, SigmaMinus),
+             lambda e: SigmaX() / 2 - I * SigmaY() / 2),
+            (lambda e: isinstance(e, SigmaPlus),
+             lambda e: SigmaX() / 2 + I * SigmaY() / 2)]
+        )
+
+
 # -----------------------------------------------------------------------------
-# Commutators and BCH expansions
+# Utility functions for manipulating operator expressions
 #
 def split_coeff_operator(e):
     """
@@ -225,6 +280,11 @@ def split_coeff_operator(e):
                     c_args.append(c ** arg.exp)
                 if o and o != 1:
                     o_args.append(o ** arg.exp)
+            elif isinstance(arg, Add):
+                if arg.is_commutative:
+                    c_args.append(arg)
+                else:
+                    o_args.append(arg)
             else:
                 c_args.append(arg)
 
@@ -232,7 +292,7 @@ def split_coeff_operator(e):
 
     if isinstance(e, Add):
         # XXX: fix this  -> return to lists
-        return split_coeff_operator(e.args[0])
+        return [split_coeff_operator(arg) for arg in e.args]
 
     if debug:
         print("Warning: Unrecognized type of e: %s" % type(e))
@@ -242,7 +302,7 @@ def split_coeff_operator(e):
 
 def extract_operators(e, independent=False):
     """
-    Return a list of unique normal-ordered quantum operator products in the
+    Return a list of unique quantum operator products in the
     expression e.
     """
     ops = []
@@ -299,6 +359,60 @@ def extract_operator_products(e, independent=False):
                              (type(no_op), no_op))
 
     return list(set(no_ops))
+
+
+def extract_all_operators(e_orig):
+    """
+    Extract all unique operators in the normal ordered for of a given
+    operator expression, including composite operators. The resulting list
+    of operators are sorted in increasing order.
+    """
+    if debug:
+        print("extract_all_operators: ", e_orig)
+
+    if isinstance(e_orig, Operator):
+        return [e_orig]
+
+    e = drop_c_number_terms(normal_ordered_form(e_orig.expand(),
+                                                independent=True))
+
+    if isinstance(e, Pow) and isinstance(e.base, Operator):
+        return [e]
+
+    ops = []
+
+    if isinstance(e, Add):
+        for arg in e.args:
+            ops += extract_all_operators(arg)
+
+    if isinstance(e, Mul):
+        op_f = [f for f in e.args if (isinstance(f, Operator) or
+                                      (isinstance(f, Pow) and
+                                       isinstance(f.base, Operator)))]
+        ops.append(Mul(*op_f))
+        ops += op_f
+
+    unique_ops = list(set(ops))
+
+    sorted_unique_ops = sorted(unique_ops, key=operator_order)
+
+    return sorted_unique_ops
+
+def operator_order(op):
+    if isinstance(op, Operator):
+        return 1
+
+    if isinstance(op, Mul):
+        return sum([operator_order(arg) for arg in op.args])
+
+    if isinstance(op, Pow):
+        return operator_order(op.base) * op.exp
+
+    return 0
+
+
+def operator_sort_by_order(ops):
+    return sorted(ops, key=operator_order)
 
 
 def drop_terms_containing(e, e_drops):
@@ -605,57 +719,6 @@ def operator_master_equation(op_t, t, H, a_ops, use_eq=True):
 # -----------------------------------------------------------------------------
 # Semiclassical equations of motion
 #
-def operator_order(op):
-    if isinstance(op, Operator):
-        return 1
-
-    if isinstance(op, Mul):
-        return sum([operator_order(arg) for arg in op.args])
-
-    if isinstance(op, Pow):
-        return operator_order(op.base) * op.exp
-
-    return 0
-
-
-def operator_sort_by_order(ops):
-    return sorted(ops, key=operator_order)
-
-
-def _extract_operators(e_orig):  # duplicate ?
-
-    debug = False
-    if debug:
-        print("_extract_operators: ", e_orig)
-
-    if isinstance(e_orig, Operator):
-        return [e_orig]
-
-    e = drop_c_number_terms(normal_ordered_form(e_orig.expand(),
-                                                independent=True))
-
-    if isinstance(e, Pow) and isinstance(e.base, Operator):
-        return [e]
-
-    ops = []
-
-    if isinstance(e, Add):
-        for arg in e.args:
-            ops += _extract_operators(arg)
-
-    if isinstance(e, Mul):
-        op_f = [f for f in e.args if (isinstance(f, Operator) or
-                                      (isinstance(f, Pow) and
-                                       isinstance(f.base, Operator)))]
-        ops.append(Mul(*op_f))
-        ops += op_f
-
-    unique_ops = list(set(ops))
-
-    sorted_unique_ops = sorted(unique_ops, key=operator_order)
-
-    return sorted_unique_ops
-
 
 def _operator_to_func(e, op_func_map):
 
@@ -679,7 +742,7 @@ def semi_classical_eqm(H, c_ops, N=20):
 
     op_eqm = {}
 
-    ops = _extract_operators(H + sum(c_ops))
+    ops = extract_all_operators(H + sum(c_ops))
 
     print("Hamiltonian operators: ", ops)
 
@@ -705,7 +768,7 @@ def semi_classical_eqm(H, c_ops, N=20):
         op_eqm[op] = qsimplify(normal_ordered_form(
             rhs.doit(independent=True).expand(), independent=True))
 
-        new_ops = _extract_operators(op_eqm[op])
+        new_ops = extract_all_operators(op_eqm[op])
 
         for new_op in new_ops:
             if ((not new_op.is_Number) and
@@ -719,7 +782,7 @@ def semi_classical_eqm(H, c_ops, N=20):
         op_eqm[op] = drop_terms_containing(op_eqm[op], ops)
 
     for op, eqm in op_eqm.items():
-        for o in _extract_operators(eqm):
+        for o in extract_all_operators(eqm):
             if o not in op_eqm.keys():
                 print("Unresolved operator: ", o)
 
@@ -739,6 +802,6 @@ def semi_classical_eqm(H, c_ops, N=20):
                         _operator_to_func(eqm, op_func_map))
 
     #for eqm in op_eqm:
-    #    eqm_ops = _extract_operators(op_eqm[op])
+    #    eqm_ops = extract_all_operators(op_eqm[op])
 
     return op_eqm, sc_eqm, sc_ode, op_func_map
