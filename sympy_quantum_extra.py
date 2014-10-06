@@ -62,82 +62,246 @@ def exchange_integral_order(e):
         return e
 
 
-def pull_outwards(e, _n=0, expand_add=False):
+def _pull_outwards_sum(e, _n=0):
+    f = pull_outwards(e.function, _n=_n+1).factor()
+    dvar = e.variables
+    if isinstance(f.expand(), Add):
+        f = f.expand()
+        add_args = []
+        for term in f.args:
+            args = [term]
+            for lim in e.limits:
+                args.append(lim)
+            add_args.append(Sum(*args))
+        ne = Add(*add_args)
+        return pull_outwards(ne, _n=_n+1)
+        
+    if isinstance(f, Mul):
+        c = [arg for arg in f.args if not isinstance(arg, Sum)]
+        s_in = [arg for arg in f.args if isinstance(arg, Sum)]
+
+        const = [arg for arg in c if dvar[0] not in arg.free_symbols]
+        nconst = [arg for arg in c if dvar[0] in arg.free_symbols]
+
+        if len(dvar) == 1:
+            return Mul(*const) * Sum(Mul(*nconst) * Mul(*s_in), e.limits[0])
+        else:
+            args = [Mul(*const) * Sum(Mul(*nconst) * Mul(*s_in), e.limits[0])]
+            for lim in e.limits[1:]:
+                args.append(lim)
+            return pull_outwards(Sum(*args), _n=_n+1)
+
+        f = pull_outwards(e.function, _n=_n+1).factor()
+        dvar = e.variables
+        if isinstance(f.expand(), Add):
+            f = f.expand()
+            add_args = []
+            for term in f.args:
+                args = [term]
+                for lim in e.limits:
+                    args.append(lim)
+                add_args.append(Integral(*args))
+            ne = Add(*add_args)
+            return pull_outwards(ne, _n=_n+1)
+            
+        if isinstance(f, Mul):
+            c = [arg for arg in f.args if not isinstance(arg, Integral)]
+            i_in = [arg for arg in f.args if isinstance(arg, Integral)]
+
+            const = [arg for arg in c if dvar[0] not in arg.free_symbols]
+            nconst = [arg for arg in c if dvar[0] in arg.free_symbols]
+            
+            if len(dvar) == 1:
+                return Mul(*const) * Integral(Mul(*nconst) * Mul(*i_in),
+                                            e.limits[0])
+            else:
+                args = [Mul(*const) * Integral(Mul(*nconst) * Mul(*i_in),
+                                            e.limits[0])]
+                for lim in e.limits[1:]:
+                    args.append(lim)
+                return pull_outwards(Integral(*args), _n=_n+1)
+
+
+def _pull_outwards_integral(e, _n=0):
+    f = e.function
+    if isinstance(f, Sum):
+        return pull_outwards(Sum(Integral(f.function, e.limits), f.limits))
+    f = pull_outwards(e.function, _n=_n+1).factor()
+    dvar = e.variables
+    if isinstance(f.expand(), Add):
+        f = f.expand()
+        for term in f.args:
+            add_args = []
+            args = [term]
+            for lim in e.limits:
+                add_args.append(Integral(*args))
+                args.append(lim)
+        ne = Add(*add_args)
+        return pull_outwards(ne, _n=_n+1)
+    if isinstance(f, Mul):
+        c = [arg for arg in f.args if not (isinstance(arg, Integral)
+                                        or isinstance(arg, Sum))]
+        i_in = [arg for arg in f.args if isinstance(arg, Integral)]
+        s_in = [arg for arg in f.args if isinstance(arg, Sum)]
+        
+        if not s_in == []: # First, take summations out of the integrand
+            nfunc = Mul(*c) * s_in[0].function * Mul(*s_in[1:]) * Mul(*i_in)
+            return pull_outwards(Sum(Integral(nfunc, e.limits),
+                                     s_in[0].limits), _n=_n+1)
+    
+        const = [arg for arg in c if dvar[0] not in arg.free_symbols]
+        nconst = [arg for arg in c if dvar[0] in arg.free_symbols]
+        
+        if len(dvar) == 1:
+            return Mul(*const) * Integral(Mul(*nconst) * Mul(*i_in),
+                       e.limits[0])
+        else:
+            args = [Mul(*const) * Integral(Mul(*nconst) * Mul(*i_in),
+                    e.limits[0])]
+            for lim in e.limits[1:]:
+                args.append(lim)
+            return pull_outwards(Integral(*args), _n=_n+1)
+
+def pull_outwards(e, _n=0):
     """ 
-    Trick to maximally pull out constant elements from the integrand,
-    and expand terms inside the integrand.
+    Trick to maximally pull out constant elements and summation from the
+    integrand or the summand.
+    
     """
     if _n > 20:
         warnings.warn("Too high level or recursion, aborting")
         return e
     if isinstance(e, Add):
         return Add(*[pull_outwards(arg, _n=_n+1) for arg in e.args]).expand()
+    print(e)
     if isinstance(e, Mul):
         return Mul(*[pull_outwards(arg, _n=_n+1) for arg in e.args]).expand()
+    if isinstance(e, Sum):
+        return _pull_outwards_sum(e, _n=_n+1)
     if isinstance(e, Integral):
-        func = pull_outwards(e.function, _n=_n+1).factor()
-        dummy_var = e.variables
-        if add and isinstance(func.expand(), Add):
-            func = func.expand()
-            add_args = []
-            for term in func.args:
-                args = [term]
-                for lim in e.limits:
-                    args.append(lim)
-                add_args.append(Integral(*args))
-            e_new = Add(*add_args)
-            return pull_outwards(e_new, _n=_n+1)
-        if isinstance(func, Mul):
-            non_integral = Mul(*[arg for arg in func.args if not isinstance(arg, Integral)])
-            integrals    = Mul(*[arg for arg in func.args if isinstance(arg, Integral)])
-
-            const = Mul(*[arg for arg in non_integral.args if dummy_var[0] not in arg.free_symbols])
-            nonconst = Mul(*[arg for arg in non_integral.args if dummy_var[0] in arg.free_symbols])
-            if const == 1:
-                return e
-            else:
-                if len(dummy_var) == 1:
-                    return const * Integral(nonconst * integrals, e.limits[0])
-                else:
-                    args = [const * Integral(nonconst * integrals, e.limits[0])]
-                    for lim in e.limits[1:]:
-                        args.append(lim)
-                    return pull_outwards(Integral(*args), _n=_n+1)
-    else:
-        return e
+        return _pull_outwards_integral(e, _n=_n+1)
+    return e       
 
 
 def push_inwards(e, _n=0):
     """
-    Trick to push every factors into integrand
+    Trick to push every factors into integrand or summand
+    """
+    if _n > 20:
+        warnings.warn("Too high level or recursion, aborting")
+        return e
+
+    if isinstance(e, Add):
+        return Add(*[push_inwards(arg, _n=_n+1) for arg in e.args])
+
+    if isinstance(e, Mul):
+        c = Mul(*[arg for arg in e.args if not (isinstance(arg, Integral)
+                                                or isinstance(arg, Sum))])
+        i_in = [arg for arg in e.args if isinstance(arg, Integral)]
+        s_in = [arg for arg in e.args if isinstance(arg, Sum)]
+
+        if not s_in == []:
+            func_in = s_in[0].function
+            args = [c * func_in * Mul(*s_in[1:]) * Mul(*i_in)]
+            for lim_in in s_in[0].limits:
+                args.append(lim_in)
+            return push_inwards(Sum(*args).expand(), _n=_n+1)
+
+        if not i_in == []:
+            func_in = i_in[0].function
+            args = [c * func_in * Mul(*s_in) * Mul(*i_in[1:])]
+            for lim_in in i_in[0].limits:
+                args.append(lim_in)
+            return push_inwards(Integral(*args).expand(), _n=_n+1)
+        return e
+
+    if isinstance(e, Sum):
+        func = e.function
+        nfunc = push_inwards(func.expand(), _n=_n+1)
+        
+        args = [nfunc]
+        for lim in e.limits:
+            args.append(lim)
+        return Sum(*args)
+        
+    if isinstance(e, Integral):
+        func = e.function
+        nfunc = push_inwards(func.expand(), _n=_n+1)
+
+        args = [nfunc]
+        for lim in e.limits:
+            args.append(lim)
+        return Integral(*args)
+
+
+def integral_pow_expand(e, _n=0):
+    """
+    replace powers of an Integral (integer order) with multiple integral
+    containing dummy variables(')
     """
     if _n > 20:
         warnings.warn("Too high level or recursion, aborting")
         return e
     if isinstance(e, Add):
-        return Add(*[push_inwards(arg, _n=_n+1) for arg in e.args])
+        return Add(*(integral_pow_expand(arg, _n=_n+1) for arg in e.args))
     if isinstance(e, Mul):
-        c = Mul(*[arg for arg in e.args if not isinstance(arg, Integral)])
-        i_in = Mul(*[arg for arg in e.args if isinstance(arg, Integral)])
-        if isinstance(i_in, Integral):
-            func_in = i_in.function
-            args = [c * func_in]
-            for lim_in in i_in.limits:
-                args.append(lim_in)
-            return push_inwards(Integral(*args).expand(), _n=_n+1)
-        else:
-            return e
+        return Mul(*(integral_pow_expand(arg, _n=_n+1) for arg in e.args))
     if isinstance(e, Integral):
-        func = e.function
-        new_func = push_inwards(func.expand(), _n=_n+1)
+        func, lims = e.function, e.limits
+        return Integral(integral_pow_expand(func, _n=_n+1), lims)   
+    if isinstance(e, Pow):
+        b = e.base
+        ex = e.exp
+        if isinstance(b, Integral) and isinstance(ex, Integer):
+            i = b.function
+            dvar = b.limits[0][0]
+            if len(b.variables)==1:
+                dvars = [Symbol(str(dvar) + "'"*j, **dvar.assumptions0) for j in range(ex)]
+                if len(b.limits[0])==1:
+                    nlim = [(dvars[j]) for j in range(ex)]
+                elif len(b.limits[0])==2:
+                    nlim = [(dvars[j], b.limits[0][1]) for j in range(ex)]
+                else:
+                    nlim = [(dvars[j], b.limits[0][1], b.limits[0][2]) for j in range(ex)]
+                inew = 1
+                for j in range(ex):
+                    inew = Integral(i.replace(dvars[0], dvars[j]) * inew, nlim[j])
+                return inew
+    return e
 
-        args = [new_func]
-        for lim in e.limits:
-            args.append(lim)
-        return Integral(*args)
-    else:
+def replace_dirac_delta(e, _n=0):
+    """
+    Look for Integral of the form ∫ exp(I*k*x) dx
+    and replace with 2*pi*DiracDelta(k)
+    """
+    if _n > 20:
+        warnings.warn("Too high level or recursion, aborting")
         return e
-
+    if isinstance(e, Add):
+        return Add(*[replace_dirac_delta(arg, _n=_n+1) for arg in e.args])
+    if isinstance(e, Mul):
+        return Mul(*[replace_dirac_delta(arg, _n=_n+1) for arg in e.args])
+    if isinstance(e, Integral):
+        func = simplify(e.function)
+        lims = e.limits
+        if isinstance(func, exp) and len(lims[0])==3: # works only for definite integrals
+            ex_s = simplify(func.exp)
+            dvar, xa, xb = lims[0]
+            if (isinstance(ex_s, Mul)
+                and all([x in ex_s.args for x in [I, dvar]])
+                and (xa, xb)==(-oo, oo)):
+                nvar = ex_s/(I*dvar)
+                new_func = 2*pi* DiracDelta(nvar)
+                if len(lims)==1:
+                    return new_func
+                else:
+                    nargs = [new_func]
+                    for i in range(1, len(lims)):
+                        nargs.append(lims[i])
+                    return Integral(*nargs)
+        else:
+            return Integral(replace_dirac_delta(e.function, _n=_n+1), lims)
+    return e    
 
 # -----------------------------------------------------------------------------
 # Simplification of quantum expressions
@@ -190,9 +354,9 @@ def qsimplify(e_orig, _n=0):
 #
 def split_coeff_operator(e):
     """
-    Split a product of coefficients, commuting variables and quantum operators
-    into two factors containing the commuting factors and the quantum operators,
-    resepectively.
+    Split a product of coefficients, commuting variables and quantum
+    operators into two factors containing the commuting factors and the
+    quantum operators, resepectively.
     
     Returns:
     c_factor, o_factors:
