@@ -155,9 +155,12 @@ def push_inwards(e, _n=0):
 
 def expression_tree_transform(e, transformations):
     """
-    Traverse and exressions three and conditionally apply a transform on the
-    nodes in the tree.
+    Traverse and exressions tree  (or list thereof) and conditionally apply a
+    transform on the nodes in the tree.
     """
+    if isinstance(e, list):
+        return [expression_tree_transform(ee, transformations) for ee in e]
+
     for cond_func, trans_func in transformations:
         if cond_func(e):
             return trans_func(e)
@@ -397,6 +400,7 @@ def extract_all_operators(e_orig):
     sorted_unique_ops = sorted(unique_ops, key=operator_order)
 
     return sorted_unique_ops
+
 
 def operator_order(op):
     if isinstance(op, Operator):
