@@ -9,6 +9,9 @@ from sympy.physics.quantum.fermion import *
 from sympy.physics.quantum.operatorordering import *
 from sympy.physics.quantum.expectation import Expectation
 
+from sympy.physics.quantum.pauli import (SigmaX, SigmaY, SigmaZ, SigmaMinus,
+                                         SigmaPlus)
+
 debug = False
 
 # -----------------------------------------------------------------------------
@@ -23,7 +26,7 @@ def show_first_few_terms(e, n=10):
     if isinstance(e, Add):
         e_args_trunc = e.args[0:n]
         e = Add(*(e_args_trunc))
-    
+
     return Latex("$" + latex(e).replace("dag", "dagger") + r"+ \dots$")
 
 
@@ -31,9 +34,11 @@ def html_table(data):
     t_table = "<table>\n%s\n</table>"
     t_row = "<tr>%s</tr>"
     t_col = "<td>%s</td>"
-    table_code = t_table % "".join([t_row % "".join([t_col % ("$%s$" % latex(col).replace(r'\dag', r'\dagger'))
-                                                     for col in row])
-                                    for row in data])
+    table_code = t_table % "".join(
+        [t_row % "".join([t_col % ("$%s$" % latex(col).replace(r'\dag', r'\dagger'))
+                          for col in row])
+         for row in data])
+
     return HTML(table_code)
 
 
@@ -43,7 +48,8 @@ def html_table(data):
 def exchange_integral_order(e):
     """
     exchanging integral order. Works in this way:
-    ∫(∫ ... (∫(∫    dx_0)dx_1)... dx_n-1)dx_n -->  ∫(∫ ... (∫(∫  dx_1)dx_2)... dx_n)dx_0
+    ∫(∫ ... (∫(∫    dx_0)dx_1)... dx_n-1)dx_n -->
+    ∫(∫ ... (∫(∫  dx_1)dx_2)... dx_n)dx_0
     """
     if isinstance(e, Add):
         return Add(*[exchange_integral_order(arg) for arg in e.args])
@@ -137,7 +143,6 @@ def pull_outwards(e, _n=0):
     """ 
     Trick to maximally pull out constant elements and summation from the
     integrand or the summand.
-    
     """
     if _n > 30:
         warnings.warn("Too high level or recursion, aborting")
@@ -151,7 +156,7 @@ def pull_outwards(e, _n=0):
         return _pull_outwards_sum(e, _n=_n+1)
     if isinstance(e, Integral):
         return _pull_outwards_integral(e, _n=_n+1)
-    return e       
+    return e
 
 
 def push_inwards(e, _n=0):
@@ -323,10 +328,28 @@ def replace_dirac_delta(e, _n=0):
 # -----------------------------------------------------------------------------
 # Simplification of quantum expressions
 #
+
+def expression_tree_transform(e, transformations):
+    """
+    Traverse and exressions three and conditionally apply a transform on the
+    nodes in the tree.
+    """
+    for cond_func, trans_func in transformations:
+        if cond_func(e):
+            return trans_func(e)
+
+    if isinstance(e, (Add, Mul, Pow, exp)):
+        t = type(e)
+        return t(*(expression_tree_transform(arg, transformations)
+                   for arg in e.args))
+    else:
+        return e
+
+
 def qsimplify(e_orig, _n=0):
     """
     Simplify an expression containing operators.
-    """    
+    """
     if _n > 15:
         warnings.warn("Too high level or recursion, aborting")
         return e_orig
@@ -335,6 +358,12 @@ def qsimplify(e_orig, _n=0):
 
     if isinstance(e, Add):
         return Add(*(qsimplify(arg, _n=_n+1) for arg in e.args))
+
+    elif isinstance(e, Pow):
+        return Pow(*(qsimplify(arg, _n=_n+1) for arg in e.args))
+
+    elif isinstance(e, exp):
+        return exp(*(qsimplify(arg, _n=_n+1) for arg in e.args))
 
     elif isinstance(e, Mul):
         args1 = tuple(arg for arg in e.args if arg.is_commutative)
@@ -366,15 +395,43 @@ def qsimplify(e_orig, _n=0):
         return qsimplify(e, _n=_n+1).expand()
 
 
+def pauli_represent_minus_plus(e):
+    """
+    Traverse an expression and change all instances of SigmaX and SigmaY
+    to the corresponding expressions using SigmaMinus and SigmaPlus.
+    """
+    # XXX: todo, make sure that new operators inherit labels
+    return expression_tree_transform(
+        e, [(lambda e: isinstance(e, SigmaX),
+             lambda e: SigmaMinus() + SigmaPlus()),
+            (lambda e: isinstance(e, SigmaY),
+             lambda e: I * SigmaMinus() - I * SigmaPlus())]
+        )
+
+
+def pauli_represent_x_y(e):
+    """
+    Traverse an expression and change all instances of SigmaMinus and SigmaPlus
+    to the corresponding expressions using SigmaX and SigmaY.
+    """
+    # XXX: todo, make sure that new operators inherit labels
+    return expression_tree_transform(
+        e, [(lambda e: isinstance(e, SigmaMinus),
+             lambda e: SigmaX() / 2 - I * SigmaY() / 2),
+            (lambda e: isinstance(e, SigmaPlus),
+             lambda e: SigmaX() / 2 + I * SigmaY() / 2)]
+        )
+
+
 # -----------------------------------------------------------------------------
-# Commutators and BCH expansions
+# Utility functions for manipulating operator expressions
 #
 def split_coeff_operator(e):
     """
     Split a product of coefficients, commuting variables and quantum
     operators into two factors containing the commuting factors and the
     quantum operators, resepectively.
-    
+
     Returns:
     c_factor, o_factors:
         Commuting factors and noncommuting (operator) factors
@@ -387,7 +444,7 @@ def split_coeff_operator(e):
 
     if isinstance(e, Mul):
         c_args = []
-        o_args = []    
+        o_args = []
 
         for arg in e.args:
             if isinstance(arg, Operator):
@@ -399,14 +456,19 @@ def split_coeff_operator(e):
                     c_args.append(c ** arg.exp)
                 if o and o != 1:
                     o_args.append(o ** arg.exp)
+            elif isinstance(arg, Add):
+                if arg.is_commutative:
+                    c_args.append(arg)
+                else:
+                    o_args.append(arg)
             else:
                 c_args.append(arg)
-        
+
         return Mul(*c_args), Mul(*o_args)
 
     if isinstance(e, Add):
         # XXX: fix this  -> return to lists
-        return split_coeff_operator(e.args[0])
+        return [split_coeff_operator(arg) for arg in e.args]
 
     if debug:
         print("Warning: Unrecognized type of e: %s" % type(e))
@@ -416,14 +478,14 @@ def split_coeff_operator(e):
 
 def extract_operators(e, independent=False):
     """
-    Return a list of unique normal-ordered quantum operator products in the
+    Return a list of unique quantum operator products in the
     expression e.
     """
     ops = []
 
     if isinstance(e, Operator):
         ops.append(e)
-    
+
     elif isinstance(e, Add):
         for arg in e.args:
             ops += extract_operators(arg, independent=independent)
@@ -434,7 +496,7 @@ def extract_operators(e, independent=False):
     else:
         if debug:
             print("Unrecongized type: %s: %s" % (type(e), str(e)))
-        
+
     return list(set(ops))
 
 
@@ -447,7 +509,7 @@ def extract_operator_products(e, independent=False):
 
     if isinstance(e, Operator):
         ops.append(e)
-    
+
     elif isinstance(e, Add):
         for arg in e.args:
             ops += extract_operator_products(arg, independent=independent)
@@ -459,7 +521,7 @@ def extract_operator_products(e, independent=False):
     else:
         if debug:
             print("Unrecongized type: %s: %s" % (type(e), str(e)))
-        
+
     no_ops = []
     for op in ops:
         no_op = normal_ordered_form(op.expand(), independent=independent)
@@ -474,6 +536,61 @@ def extract_operator_products(e, independent=False):
 
     return list(set(no_ops))
 
+
+def extract_all_operators(e_orig):
+    """
+    Extract all unique operators in the normal ordered for of a given
+    operator expression, including composite operators. The resulting list
+    of operators are sorted in increasing order.
+    """
+    if debug:
+        print("extract_all_operators: ", e_orig)
+
+    if isinstance(e_orig, Operator):
+        return [e_orig]
+
+    e = drop_c_number_terms(normal_ordered_form(e_orig.expand(),
+                                                independent=True))
+
+    if isinstance(e, Pow) and isinstance(e.base, Operator):
+        return [e]
+
+    ops = []
+
+    if isinstance(e, Add):
+        for arg in e.args:
+            ops += extract_all_operators(arg)
+
+    if isinstance(e, Mul):
+        op_f = [f for f in e.args if (isinstance(f, Operator) or
+                                      (isinstance(f, Pow) and
+                                       isinstance(f.base, Operator)))]
+        ops.append(Mul(*op_f))
+        ops += op_f
+
+    unique_ops = list(set(ops))
+
+    sorted_unique_ops = sorted(unique_ops, key=operator_order)
+
+    return sorted_unique_ops
+
+def operator_order(op):
+    if isinstance(op, Operator):
+        return 1
+
+    if isinstance(op, Mul):
+        return sum([operator_order(arg) for arg in op.args])
+
+    if isinstance(op, Pow):
+        return operator_order(op.base) * op.exp
+
+    return 0
+
+
+def operator_sort_by_order(ops):
+    return sorted(ops, key=operator_order)
+
+
 def drop_terms_containing(e, e_drops):
     """
     Drop terms contaning factors in the list e_drops
@@ -481,26 +598,25 @@ def drop_terms_containing(e, e_drops):
     if isinstance(e, Add):
         # fix this
         #e = Add(*(arg for arg in e.args if not any([e_drop in arg.args
-        #                                               for e_drop in e_drops])))
-                                                       
+        #                                            for e_drop in e_drops])))
+
         new_args = []
-        
+
         for term in e.args:
-            
+
             keep = True
             for e_drop in e_drops:
                 if e_drop in term.args:
                     keep = False
-                    
+
                 if isinstance(e_drop, Mul):
                     if all([(f in term.args) for f in e_drop.args]):
                         keep = False
-            
+
             if keep:
         #        new_args.append(arg)
                 new_args.append(term)
         e = Add(*new_args)
-                                                       
         #e = Add(*(arg.subs({key: 0 for key in e_drops}) for arg in e.args))
 
     return e
@@ -514,6 +630,7 @@ def drop_c_number_terms(e):
         return Add(*(arg for arg in e.args if not arg.is_commutative))
 
     return e
+
 
 def subs_single(O, subs_map):
 
@@ -546,22 +663,35 @@ def subs_single(O, subs_map):
 # Commutators and BCH expansions
 #
 def recursive_commutator(a, b, n=1):
-    return Commutator(a, b) if n == 1 else Commutator(a, recursive_commutator(a, b, n-1))
+    """
+    Generate a recursive commutator of order n:
+
+    [a, b]_1 = [a, b]
+    [a, b]_2 = [a, [a, b]]
+    [a, b]_3 = [a, [a, b]_2] = [a, [a, [a, b]]]
+    ...
+
+    """
+    if n == 1:
+        return Commutator(a, b)
+    else:
+        Commutator(a, recursive_commutator(a, b, n-1))
 
 
 def _bch_expansion(A, B, N=10):
     """
     Baker–Campbell–Hausdorff formula:
-    
-    e^{A} B e^{-A} = B + 1/(1!)[A, B] + 1/(2!)[A, [A, B]] + 1/(3!)[A, [A, [A, B]]] + ...
+
+    e^{A} B e^{-A} = B + 1/(1!)[A, B] +
+                     1/(2!)[A, [A, B]] + 1/(3!)[A, [A, [A, B]]] + ...
                    = B + Sum_n^N 1/(n!)[A, B]^n
-                   
+
     Truncate the sum at N terms.
     """
     e = B
     for n in range(1, N):
         e += recursive_commutator(A, B, n=n) / factorial(n)
-    
+
     return e
 
 
@@ -573,7 +703,6 @@ def bch_expansion(A, B, N=6, collect_operators=None, independent=False,
     if debug:
         print("bch_expansion: ", A, B)
 
-    
     c, _ = split_coeff_operator(A)
 
     if debug:
@@ -587,9 +716,9 @@ def bch_expansion(A, B, N=6, collect_operators=None, independent=False,
     if debug:
         print("simplify: ")
 
-    e = qsimplify(normal_ordered_form(e_bch.expand(), 
-                                     recursive_limit=25,
-                                     independent=independent).expand())
+    e = qsimplify(normal_ordered_form(e_bch.expand(),
+                                      recursive_limit=25,
+                                      independent=independent).expand())
 
     if debug:
         print("extract operators: ")
@@ -603,7 +732,7 @@ def bch_expansion(A, B, N=6, collect_operators=None, independent=False,
         print("operators in expression: ", ops)
 
     if collect_operators:
-        e_collected = collect(e, collect_operators)        
+        e_collected = collect(e, collect_operators)
     else:
         e_collected = collect(e, ops)
 
@@ -616,38 +745,38 @@ def bch_expansion(A, B, N=6, collect_operators=None, independent=False,
             if debug:
                 print("free symbols in c: ", c_fs)
             return qsimplify(e_collected.subs({
-                    exp(c).series(c, n=N).removeO(): exp(c), #c
-                    exp(-c).series(-c, n=N).removeO(): exp(-c), #-c
-                    exp(2*c).series(2*c, n=N).removeO(): exp(2*c), #c
-                    exp(-2*c).series(-2*c, n=N).removeO(): exp(-2*c), #-c, list(c.free_symbols)[0]
-                    #
-                    cosh(c).series(c, n=N).removeO(): cosh(c),
-                    sinh(c).series(c, n=N).removeO(): sinh(c),
-                    sinh(2*c).series(2 * c, n=N).removeO(): sinh(2*c),
-                    cosh(2*c).series(2 * c, n=N).removeO(): cosh(2*c),
-                    sinh(4*c).series(4 * c, n=N).removeO(): sinh(4*c),
-                    cosh(4*c).series(4 * c, n=N).removeO(): cosh(4*c),
-                    #
-                    sin(c).series(c, n=N).removeO(): sin(c),
-                    cos(c).series(c, n=N).removeO(): cos(c),
-                    sin(2*c).series(2*c, n=N).removeO(): sin(2*c),
-                    cos(2*c).series(2*c, n=N).removeO(): cos(2*c),
-                    sin(2*I*c).series(2*I*c, n=N).removeO(): sin(2*I*c),
-                    sin(-2*I*c).series(-2*I*c, n=N).removeO(): sin(-2*I*c),
-                    cos(2*I*c).series(2*I*c, n=N).removeO(): cos(2*I*c),
-                    cos(-2*I*c).series(-2*I*c, n=N).removeO(): cos(-2*I*c),
-                    #
-                    sin(c_fs).series(c_fs, n=N).removeO(): sin(c_fs),
-                    cos(c_fs).series(c_fs, n=N).removeO(): cos(c_fs),
-                    (sin(c_fs)/2).series(c_fs, n=N).removeO(): sin(c_fs)/2,
-                    (cos(c_fs)/2).series(c_fs, n=N).removeO(): cos(c_fs)/2,
-                    #sin(2*c_fs).series(c_fs, n=N).removeO(): sin(2*c_fs),
-                    #cos(2*c_fs).series(c_fs, n=N).removeO(): cos(2*c_fs),
-                    #sin(2 * c_fs).series(2 * c_fs, n=N).removeO(): sin(2 * c_fs),
-                    #cos(2 * c_fs).series(2 * c_fs, n=N).removeO(): cos(2 * c_fs),
-                    #(sin(c_fs)/2).series(c_fs, n=N).removeO(): sin(c_fs)/2,
-                    #(cos(c_fs)/2).series(c_fs, n=N).removeO(): cos(c_fs)/2,
-                }))  
+                exp(c).series(c, n=N).removeO(): exp(c),
+                exp(-c).series(-c, n=N).removeO(): exp(-c),
+                exp(2*c).series(2*c, n=N).removeO(): exp(2*c),
+                exp(-2*c).series(-2*c, n=N).removeO(): exp(-2*c),
+                #
+                cosh(c).series(c, n=N).removeO(): cosh(c),
+                sinh(c).series(c, n=N).removeO(): sinh(c),
+                sinh(2*c).series(2 * c, n=N).removeO(): sinh(2*c),
+                cosh(2*c).series(2 * c, n=N).removeO(): cosh(2*c),
+                sinh(4*c).series(4 * c, n=N).removeO(): sinh(4*c),
+                cosh(4*c).series(4 * c, n=N).removeO(): cosh(4*c),
+                #
+                sin(c).series(c, n=N).removeO(): sin(c),
+                cos(c).series(c, n=N).removeO(): cos(c),
+                sin(2*c).series(2*c, n=N).removeO(): sin(2*c),
+                cos(2*c).series(2*c, n=N).removeO(): cos(2*c),
+                sin(2*I*c).series(2*I*c, n=N).removeO(): sin(2*I*c),
+                sin(-2*I*c).series(-2*I*c, n=N).removeO(): sin(-2*I*c),
+                cos(2*I*c).series(2*I*c, n=N).removeO(): cos(2*I*c),
+                cos(-2*I*c).series(-2*I*c, n=N).removeO(): cos(-2*I*c),
+                #
+                sin(c_fs).series(c_fs, n=N).removeO(): sin(c_fs),
+                cos(c_fs).series(c_fs, n=N).removeO(): cos(c_fs),
+                (sin(c_fs)/2).series(c_fs, n=N).removeO(): sin(c_fs)/2,
+                (cos(c_fs)/2).series(c_fs, n=N).removeO(): cos(c_fs)/2,
+                # sin(2*c_fs).series(c_fs, n=N).removeO(): sin(2*c_fs),
+                # cos(2*c_fs).series(c_fs, n=N).removeO(): cos(2*c_fs),
+                # sin(2 * c_fs).series(2 * c_fs, n=N).removeO(): sin(2 * c_fs),
+                # cos(2 * c_fs).series(2 * c_fs, n=N).removeO(): cos(2 * c_fs),
+                # (sin(c_fs)/2).series(c_fs, n=N).removeO(): sin(c_fs)/2,
+                # (cos(c_fs)/2).series(c_fs, n=N).removeO(): cos(c_fs)/2,
+                }))
         else:
             return e_collected
     except Exception as e:
@@ -728,14 +857,17 @@ def lindblad_dissipator(a, rho):
             - Dagger(a) * a * rho / 2)
 
 
-def master_equation(rho_t, t, H, a_ops):
+def master_equation(rho_t, t, H, a_ops, use_eq=True):
     """
     Lindblad master equation
     """
     #t = [s for s in rho_t.free_symbols if isinstance(s, Symbol)][0]
-    return Eq(diff(rho_t, t),
-            -I * Commutator(H, rho_t) +
-            sum([lindblad_dissipator(a, rho_t) for a in a_ops]))
+
+    rhs = diff(rho_t, t)
+    lhs = (-I * Commutator(H, rho_t) +
+           sum([lindblad_dissipator(a, rho_t) for a in a_ops]))
+
+    return Eq(rhs, lhs) if use_eq else (rhs, lhs)
 
 
 def operator_lindblad_dissipator(a, rho):
@@ -753,122 +885,80 @@ def operator_master_equation(op_t, t, H, a_ops, use_eq=True):
     rhs = diff(op_t, t)
     lhs = (I * Commutator(H, op_t) +
            sum([operator_lindblad_dissipator(a, op_t) for a in a_ops]))
-    
+
     if use_eq:
         return Eq(rhs, lhs)
     else:
         return rhs, lhs
 
+
 # -----------------------------------------------------------------------------
 # Semiclassical equations of motion
 #
-def operator_order(op):
-    if isinstance(op, Operator):
-        return 1
-    
-    if isinstance(op, Mul):
-        return sum([operator_order(arg) for arg in op.args]) 
-
-    if isinstance(op, Pow):
-        return operator_order(op.base) * op.exp 
-
-    return 0
-
-
-def operator_sort_by_order(ops):
-    return sorted(ops, key=operator_order)
-
-
-def _extract_operators(e_orig):  # duplicate ?
-
-    debug = False
-    if debug:
-        print("_extract_operators: ", e_orig)
-    
-    if isinstance(e_orig, Operator):
-        return [e_orig]
-
-    e = drop_c_number_terms(normal_ordered_form(e_orig.expand(), independent=True))
-
-    if isinstance(e, Pow) and isinstance(e.base, Operator):
-        return [e]
-
-    ops = []
-        
-    if isinstance(e, Add):
-        for arg in e.args:
-            ops += _extract_operators(arg)
-
-    if isinstance(e, Mul):
-        op_f = [f for f in e.args if isinstance(f, Operator) or (isinstance(f, Pow) and isinstance(f.base, Operator))]
-        ops.append(Mul(*op_f))        
-        ops += op_f
-    
-    unique_ops = list(set(ops))
-    
-    sorted_unique_ops = sorted(unique_ops, key=operator_order)
-    
-    return sorted_unique_ops
-
 
 def _operator_to_func(e, op_func_map):
-    
+
     if isinstance(e, Expectation):
         if e.expression in op_func_map:
             return op_func_map[e.expression]
         else:
             return e.expression
-    
+
     if isinstance(e, Add):
         return Add(*(_operator_to_func(term, op_func_map) for term in e.args))
 
     if isinstance(e, Mul):
-        return Mul(*(_operator_to_func(factor, op_func_map) for factor in e.args))
+        return Mul(*(_operator_to_func(factor, op_func_map)
+                     for factor in e.args))
 
     return e
-    
-    
+
+
 def semi_classical_eqm(H, c_ops, N=20):
-    
+
     op_eqm = {}
-    
-    ops = _extract_operators(H + sum(c_ops))
-    
+
+    ops = extract_all_operators(H + sum(c_ops))
+
     print("Hamiltonian operators: ", ops)
 
     t = symbols("t", positive=True)
-    
+
     n = 0
     while ops:
-        
+
         if n > N:
             print("breaking on large n (%d > %d)" % (n, N))
             break
 
         n += 1
 
-        _, idx = min((val, idx) for (idx, val) in enumerate([operator_order(op) for op in ops]))
-        
+        _, idx = min((val, idx)
+                     for (idx, val) in enumerate([operator_order(op)
+                                                  for op in ops]))
+
         op = ops.pop(idx)
-        
+
         lhs, rhs = operator_master_equation(op, t, H, c_ops, use_eq=False)
-        
-        op_eqm[op] = qsimplify(normal_ordered_form(rhs.doit(independent=True).expand(), independent=True))
-    
-        new_ops = _extract_operators(op_eqm[op])
-        
+
+        op_eqm[op] = qsimplify(normal_ordered_form(
+            rhs.doit(independent=True).expand(), independent=True))
+
+        new_ops = extract_all_operators(op_eqm[op])
+
         for new_op in new_ops:
-            if (not new_op.is_Number) and new_op not in op_eqm.keys() and new_op not in ops:
+            if ((not new_op.is_Number) and
+                    new_op not in op_eqm.keys() and new_op not in ops):
                 print(new_op, "not included, adding")
                 ops.append(new_op)
-    
+
     print("unresolved ops: ", ops)
-    
+
     for op, eqm in op_eqm.items():
         op_eqm[op] = drop_terms_containing(op_eqm[op], ops)
-    
+
     for op, eqm in op_eqm.items():
-        for o in _extract_operators(eqm):
+        for o in extract_all_operators(eqm):
             if o not in op_eqm.keys():
                 print("Unresolved operator: ", o)
 
@@ -885,9 +975,9 @@ def semi_classical_eqm(H, c_ops, N=20):
     sc_ode = {}
     for op, eqm in sc_eqm.items():
         sc_ode[op] = Eq(Derivative(_operator_to_func(op, op_func_map), t),
-                                   _operator_to_func(eqm, op_func_map))
+                        _operator_to_func(eqm, op_func_map))
 
     #for eqm in op_eqm:
-    #    eqm_ops = _extract_operators(op_eqm[op])
+    #    eqm_ops = extract_all_operators(op_eqm[op])
 
     return op_eqm, sc_eqm, sc_ode, op_func_map
