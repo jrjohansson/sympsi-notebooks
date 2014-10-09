@@ -679,7 +679,7 @@ def recursive_commutator(a, b, n=1):
     if n == 1:
         return Commutator(a, b)
     else:
-        Commutator(a, recursive_commutator(a, b, n-1))
+        return Commutator(a, recursive_commutator(a, b, n-1))
 
 
 def _bch_expansion(A, B, N=10):
