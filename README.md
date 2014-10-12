@@ -11,3 +11,4 @@ Symbolic quantum mechanics using SymPy and SymPsi
  * [Lecture 3 - Resonators and cavities](http://nbviewer.ipython.org/github/jrjohansson/sympy-quantum-notebooks/blob/master/lecture-sympsi-resonator.ipynb)
  * [Lecture 4 - Atom cavity](http://nbviewer.ipython.org/github/jrjohansson/sympy-quantum-notebooks/blob/master/lecture-sympsi-atom-cavity.ipynb)
  * [Lecture 5 - Optomechanics](http://nbviewer.ipython.org/github/jrjohansson/sympy-quantum-notebooks/blob/master/lecture-sympsi-optomechanics.ipynb)
+ * [Lecture 7 - Semiclassical equations of motion](http://nbviewer.ipython.org/github/jrjohansson/sympy-quantum-notebooks/blob/master/lecture-sympsi-semiclassical-eqm.ipynb)
